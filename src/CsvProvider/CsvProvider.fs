@@ -105,6 +105,12 @@ type public CsvProvider(cfg:TypeProviderConfig) as this =
   let asm = System.Reflection.Assembly.GetExecutingAssembly()
   let ns = "FSharp.Data"
   let csvProvTy = ProvidedTypeDefinition(asm, ns, "CsvProvider", Some(typeof<obj>))
+  let providedAssembly = new ProvidedAssembly(Path.ChangeExtension(Path.GetTempFileName(), ".dll"))
+
+  do 
+    csvProvTy.IsErased <- false
+    csvProvTy.SuppressRelocation <- false
+    providedAssembly.AddTypes([csvProvTy])
 
   let buildTypes (typeName:string) (args:obj[]) =
     let fileName = args.[0] :?> string
@@ -157,22 +163,31 @@ type public CsvProvider(cfg:TypeProviderConfig) as this =
     // Return the generated type
     resTy
 
+  let helpText = 
+    """<summary>Typed representation of a CSV file</summary>
+       <param name='Sample'>CSV sample file location</param>
+       <param name='Culture'>The culture used for parsing numbers and dates.</param>                     
+       <param name='Separator'>Column delimiter</param>                     
+       <param name='InferRows'>Number of rows to use for inference. If this is zero (the default), all rows are used.</param>"""    
+  do csvProvTy.AddXmlDoc helpText
+
   // Add static parameter that specifies the API we want to get (compile-time) 
   let parameters = 
     [ ProvidedStaticParameter("Sample", typeof<string>) 
       ProvidedStaticParameter("Separator", typeof<string>, parameterDefaultValue = ",") 
       ProvidedStaticParameter("Culture", typeof<string>, "")
       ProvidedStaticParameter("InferRows", typeof<int>, parameterDefaultValue = 0)]
-
-  let helpText = 
-    """<summary>Typed representation of a CSV file</summary>
-       <param name='Sample'>CSV sample file location</param>
-       <param name='Culture'>The culture used for parsing numbers and dates.</param>                     
-       <param name='Separator'>Column delimiter</param>                     
-       <param name='InferRows'>Number of rows to use for inference. If this is zero (the default), all rows are used.</param>"""
-
-  do csvProvTy.AddXmlDoc helpText
   do csvProvTy.DefineStaticParameters(parameters, buildTypes)
+
+
+  do System.AppDomain.CurrentDomain.add_AssemblyResolve(fun _ args ->
+    let name = AssemblyName(args.Name)
+    let existingAssembly = 
+        AppDomain.CurrentDomain.GetAssemblies()
+        |> Seq.tryFind(fun a -> AssemblyName.ReferenceMatchesDefinition(name, a.GetName()))
+    match existingAssembly with
+    | Some a -> a
+    | None -> null)
 
   // Register the main type with F# compiler
   do this.AddNamespace(ns, [ csvProvTy ])
