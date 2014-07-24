@@ -224,6 +224,8 @@ type HttpResponseWithStream =
 
 /// Constants for common HTTP content types
 module HttpContentTypes =
+    /// */*
+    let [<Literal>] Any = "*/*"
     /// plain/text
     let [<Literal>] Text = "plain/text"
     /// application/octet-stream
@@ -256,6 +258,20 @@ module HttpContentTypes =
     let [<Literal>] Csv = "text/csv"
 
 type private HeaderEnum = System.Net.HttpRequestHeader
+
+module HttpEncodings = 
+
+    let PostDefaultEncoding = Encoding.GetEncoding("ISO-8859-1") // http://stackoverflow.com/questions/708915/detecting-the-character-encoding-of-an-http-post-request/708942#708942
+    let ResponseDefaultEncoding = Encoding.GetEncoding("ISO-8859-1") // http://www.ietf.org/rfc/rfc2616.txt
+
+    let internal getEncoding (encodingStr:string) = 
+#if FX_NO_GETENCODING_BY_CODEPAGE
+        Encoding.GetEncoding encodingStr
+#else
+        match Int32.TryParse(encodingStr, NumberStyles.Integer, CultureInfo.InvariantCulture) with
+        | true, codepage -> Encoding.GetEncoding codepage                
+        | _ -> Encoding.GetEncoding encodingStr
+#endif
 
 [<AutoOpen>]
 module private Helpers =
@@ -502,8 +518,8 @@ module private Helpers =
         memoryStream
 #endif
 
-    let toHttpResponse forceText responseUrl statusCode contentType characterSet
-                       responseEncodingOverride cookies headers (memoryStream:MemoryStream) = async {
+    let toHttpResponse forceText responseUrl statusCode contentType contentEncoding
+                       characterSet responseEncodingOverride cookies headers stream = async {
 
         let isText (mimeType:string) =
             let isText (mimeType:string) =
@@ -518,14 +534,23 @@ module private Helpers =
             mimeType.Split([| ';' |], StringSplitOptions.RemoveEmptyEntries)
             |> Array.exists isText
 
+        use stream = stream
+        let! memoryStream = asyncRead stream
+
+        let memoryStream = 
+            // this only applies when automatic decompression is off
+            if contentEncoding = "gzip" then decompressGZip memoryStream
+            elif contentEncoding = "deflate" then decompressDeflate memoryStream
+            else memoryStream
+
         let respBody = 
             if forceText || isText contentType then
-                use sr = 
+                let encoding =
                     match (defaultArg responseEncodingOverride ""), characterSet with
-                    | "", "" -> new StreamReader(memoryStream)
-                    | "", characterSet -> new StreamReader(memoryStream, Encoding.GetEncoding(characterSet))
-                    | responseEncodingOverride, _ -> new StreamReader(memoryStream, Encoding.GetEncoding(responseEncodingOverride))
-
+                    | "", "" -> HttpEncodings.ResponseDefaultEncoding
+                    | "", characterSet -> Encoding.GetEncoding characterSet
+                    | responseEncodingOverride, _ -> HttpEncodings.getEncoding responseEncodingOverride
+                use sr = new StreamReader(memoryStream, encoding)
                 sr.ReadToEnd() |> Text
             else
                 memoryStream.ToArray() |> Binary
@@ -567,11 +592,11 @@ type Http private() =
         // set headers
         let hasContentType = setHeaders headers req
 
-        let automaticDecompression = ref true
+        let nativeAutomaticDecompression = ref true
 
     #if FX_NO_WEBREQUEST_AUTOMATICDECOMPRESSION
         if not (req?AutomaticDecompression <- 3) then 
-            automaticDecompression := false
+            nativeAutomaticDecompression := false
             req.Headers.[HeaderEnum.AcceptEncoding] <- "gzip,deflate"
     #else
         req.AutomaticDecompression <- DecompressionMethods.GZip ||| DecompressionMethods.Deflate
@@ -594,13 +619,13 @@ type Http private() =
 
             let defaultContentType, bytes =
                 match body with
-                | TextRequest text -> HttpContentTypes.Text, Encoding.UTF8.GetBytes(text)
+                | TextRequest text -> HttpContentTypes.Text, HttpEncodings.PostDefaultEncoding.GetBytes(text)
                 | BinaryUpload bytes -> HttpContentTypes.Binary, bytes
                 | FormValues values -> 
                     let bytes = 
                         [ for k, v in values -> Uri.EscapeDataString k + "=" + Uri.EscapeDataString v ]
                         |> String.concat "&"
-                        |> Encoding.UTF8.GetBytes
+                        |> HttpEncodings.PostDefaultEncoding.GetBytes
                     HttpContentTypes.FormValues, bytes
 
             // Set default content type if it is not specified by the user
@@ -640,21 +665,13 @@ type Http private() =
                 | _ -> 0, ""
 
             let contentEncoding = 
-                if !automaticDecompression
-                then "" 
+                // .NET removes the gzip/deflate from the content encoding header when it handles the decompression itself, but Mono doesn't, so we clear it explicitely
+                if !nativeAutomaticDecompression then ""
                 else defaultArg (Map.tryFind HttpResponseHeaders.ContentEncoding headers) ""
 
-            use stream = resp.GetResponseStream()
-            let! memoryStream = asyncRead stream
+            let stream = resp.GetResponseStream()
 
-            let memoryStream = 
-                // this only applies when automatic decompression is off
-                if contentEncoding = "gzip" then decompressGZip memoryStream
-                elif contentEncoding = "deflate" then decompressDeflate memoryStream
-                else memoryStream
-
-            return! toHttpResponse resp.ResponseUri.OriginalString statusCode resp.ContentType characterSet
-                                   responseEncodingOverride cookies headers memoryStream
+            return! toHttpResponse resp.ResponseUri.OriginalString statusCode resp.ContentType contentEncoding characterSet responseEncodingOverride cookies headers stream
         }
 
     /// Download an HTTP web resource from the specified URL asynchronously
@@ -686,7 +703,19 @@ type Http private() =
     /// The body for POST request can be specified either as text or as a list of parameters
     /// that will be encoded, and the method will automatically be set if not specified
     static member AsyncRequestStream(url, ?query, ?headers, ?httpMethod, ?body, ?cookies, ?cookieContainer, ?silentHttpErrors, ?customizeHttpRequest) =
-        let toHttpResponse responseUrl statusCode _contentType _characterSet _responseEncodingOverride cookies headers stream = async {
+        let toHttpResponse responseUrl statusCode _contentType contentEncoding _characterSet _responseEncodingOverride cookies headers stream = async {
+            let! stream = async {
+                // this only applies when automatic decompression is off
+                if contentEncoding = "gzip" then 
+                    use stream = stream
+                    let! memoryStream = asyncRead stream
+                    return decompressGZip memoryStream :> Stream
+                elif contentEncoding = "deflate" then 
+                    use stream = stream
+                    let! memoryStream = asyncRead stream
+                    return decompressDeflate memoryStream :> Stream
+                else
+                    return stream }
             return { ResponseStream = stream
                      StatusCode = statusCode
                      ResponseUrl = responseUrl

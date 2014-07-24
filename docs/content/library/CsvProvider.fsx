@@ -348,7 +348,7 @@ airQuality.Filter(fun row -> not (Double.IsNaN row.Ozone) &&
 ## Handling big datasets
 
 By default, the rows are cached so you can iterate over the `Rows` property multiple times without worrying.
-But if you will only iterate once, you can disable caching by settting the `CacheRows` static parameter of `CsvProvider`
+But if you will only iterate once, you can disable caching by setting the `CacheRows` static parameter of `CsvProvider`
 to `false` . If the number of rows is very big, you have to do this otherwise you may exhaust the memory.
 You can still cache the data at some point by using the `Cache` method, but only do that if you have already
 transformed the dataset to be smaller:
@@ -360,6 +360,7 @@ stocks.Take(10).Cache()
 (**
 ## Related articles
 
+ * [Using JSON provider in a library](JsonProvider.html#jsonlib) also applies to CSV type provider
  * [F# Data: CSV Parser and Reader](CsvFile.html) - provides more information about 
    working with CSV documents dynamically.
  * [API Reference: CsvProvider type provider](../reference/fsharp-data-csvprovider.html)

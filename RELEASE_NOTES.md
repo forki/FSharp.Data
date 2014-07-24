@@ -209,3 +209,24 @@
 * Added support for creating typed JSON and XML objects from untyped JsonValue and XElement objects.
 * Fixed crash when data files used in a type provider used on a fsx file changed.
 * Fixed problem parsing JSON values with keys with the double quote character.
+
+#### 2.0.7 - April 28 2014
+* Support for reading sample CSV, JSON, and XML from an embedded resource.
+* Fix wrong error messages being returned when sample files are not found.
+
+#### 2.0.8 - May 10 2014
+* Prevent locking of dll's when reading samples from embedded resources.
+* Fixed wrong default encoding being used for HTTP requests and responses.
+* Fixed parsing of some unicode characters in JsonValue and JsonProvider.
+* Auto-detect files with tab separators in CsvProvider.
+
+#### 2.0.9 - June 15 2014
+* Support for non-UTF8 encodings in sample files for CsvProvider, JsonProvider, and XmlProvider.
+* Fixed unnecessary character escaping in JsonValue.
+* Be more relaxed about mixing different versions on FSharp.Data.
+
+#### 2.0.10 - Unreleased
+* Improved performance of JsonValue.ToString().
+* Allow to serialize a JsonValue to a TextWriter.
+* Fixed possible memory leak.
+* Accept any MIME type in HTTP requests made by CsvProvider, JsonProvider, and XmlProvider (but still issue a preference).
